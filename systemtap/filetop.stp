@@ -1,0 +1,60 @@
+#!/usr/bin/env stap
+#
+# Filetop prints out which files are being read / written to globally on your system.
+# Every 5 seconds it prints out how many kilobytes has been read or written to a particular file.
+
+
+global reads, writes, total, filenames
+
+
+probe begin {
+    printf("Gathering data...\n")
+}
+
+probe vfs.read.return {
+    reads[dev, ino] += bytes_read
+    filenames[dev, ino] = __file_filename(file)
+}
+
+probe vfs.write.return {
+    writes[dev, ino] += bytes_written
+    filenames[dev, ino] = __file_filename(file)
+}
+
+probe timer.sec(5) {
+    foreach ([dev, inode] in reads) {
+        total[dev, inode] += reads[dev, inode]
+    }
+
+    foreach ([dev, inode] in writes) {
+        total[dev, inode] += writes[dev, inode]
+    }
+
+    ansi_clear_screen()
+    ansi_set_color3(30, 47, 0)
+    printf("\n%-14s %-60s %-20s %-20s\n", "Inode", "Filename", "KB Read", "KB Written")
+    ansi_reset_color()
+
+    totalRead = 0
+    totalWritten = 0
+
+    foreach ([dev, inode] in total- limit 40) {
+        read = reads[dev, inode] / 1024
+        totalRead += read
+        written = writes[dev, inode] / 1024
+        totalWritten += written
+        filename = filenames[dev, inode]
+        if (total[dev, inode] > 2048) {
+            printf("%-14d %-60s %-20d %-20d\n", inode, filename, read, written)
+        }
+    }
+
+    printf("\n\n\n")
+    printf("Total Read:    %dKB\n", totalRead)
+    printf("Total Written: %dKB\n", totalWritten)
+
+    delete reads
+    delete writes
+    delete total
+    delete filenames
+}

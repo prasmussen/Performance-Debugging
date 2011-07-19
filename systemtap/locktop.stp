@@ -1,0 +1,114 @@
+#!/usr/bin/env stap
+#
+# Locktop prints out file locks that are happening globally on your system.
+# Every 5 seconds it prints out how many read locks / write locks / unlocks a particular file had in that 5 second period.
+# In additon it also displays the average and max waiting time the process had to wait to get the lock.
+# The waiting time might be high if a process request a lock with the F_SETLKW argument and another process is holding a lock for a long time.
+# It also counts how many different pids that had a read or write lock on the file in the 5 second period.
+#
+# Note, you can have as many simultaneous read locks as you want, but you can only get a write lock if there are no read locks or write locks on the file.
+
+
+# Constants
+global F_RDLCK = 0
+global F_WRLCK = 1
+global F_UNLCK = 2
+
+# Arrays
+global filenames[9216], readlocks[9216], writelocks[9216], unlocks[9216], failed[9216], total[9216], pids[9216], pidcount[9216]
+
+# Aggregates
+global wlwait[9216]
+global rlwait[9216]
+
+
+probe begin {
+    printf("Gathering data...\n")
+}
+
+
+probe kernel.function("fcntl_setlk").return, kernel.function("fcntl_setlk64").return ? {
+    dev = __file_dev($filp)
+    ino = __file_ino($filp)
+    filename = __file_filename($filp)
+    filenames[dev, ino] = filename
+    pids[dev, ino, pid()] = 1
+    ltype = @cast($l, "flock")->l_type
+
+
+    if ($return < 0) {
+        failed[dev, ino]++
+    }
+    else if (ltype == F_RDLCK) {
+        rlwait[dev, ino] <<< gettimeofday_us() - @entry(gettimeofday_us())
+        readlocks[dev, ino]++
+    }
+    else if (ltype == F_WRLCK) {
+        wlwait[dev, ino] <<< gettimeofday_us() - @entry(gettimeofday_us())
+        writelocks[dev, ino]++
+    }
+    else if (ltype == F_UNLCK) {
+        unlocks[dev, ino]++
+    }
+}
+
+
+probe timer.sec(5) {
+    ansi_clear_screen()
+    ansi_set_color3(30, 47, 0)
+    printf("\n%-14s %-40s %-14s %-14s %-14s %-14s %-14s %-14s %-14s %-14s %-6s\n", "Inode", "Filename", "Read Locks", "Write Locks", "Unlocks", "Failed", "RLWaitAvg", "RLWaitMax", "WLWaitAvg", "WLWaitMax", "Pids")
+    ansi_reset_color()
+
+    foreach ([dev, ino, pid] in pids)
+        pidcount[dev, ino]++
+
+    foreach ([dev, ino] in readlocks)
+        total[dev, ino] += readlocks[dev, ino]
+
+    foreach ([dev, ino] in writelocks)
+        total[dev, ino] += writelocks[dev, ino]
+
+    foreach ([dev, ino] in unlocks)
+        total[dev, ino] += unlocks[dev, ino]
+
+    foreach ([dev, ino] in failed)
+        total[dev, ino] += failed[dev, ino]
+
+    foreach ([dev, ino] in total- limit 50) {
+        if (total[dev, ino] == 0)
+            continue
+        filename = filenames[dev, ino]
+        rdlcks = readlocks[dev, ino]
+        wrlcks = writelocks[dev, ino]
+        unlcks = unlocks[dev, ino]
+        faillcks = failed[dev, ino]
+        pcount = pidcount[dev, ino]
+
+        rlmax = 0
+        rlavg = 0
+        if (@count(rlwait[dev, ino]) > 0) {
+            rlmax = @max(rlwait[dev, ino])
+            rlavg = @avg(rlwait[dev, ino])
+        }
+
+        wlmax = 0
+        wlavg = 0
+        if (@count(wlwait[dev, ino]) > 0) {
+            wlmax = @max(wlwait[dev, ino])
+            wlavg = @avg(wlwait[dev, ino])
+        }
+        printf("%-14d %-40s %-14d %-14d %-14d %-14d %-14d %-14d %-14d %-14d %-6d\n", ino, substr(filename, 0, 40), rdlcks, wrlcks, unlcks, faillcks, rlavg, rlmax, wlavg, wlmax, pcount)
+    }
+
+    delete filenames
+    delete readlocks
+    delete writelocks
+    delete unlocks
+    delete failed
+    delete total
+    delete rlwait
+    delete wlwait
+    delete pids
+    delete pidcount
+}
+
