@@ -5,8 +5,6 @@
 # Note, if you are comparing this cs count with vmstat you need to divide the number by 5
 # as vmstat give you cs/s.
 
-# Filetop prints out which files are being read / written to globally on your system.
-# Every 5 seconds it prints out how many kilobytes has been read or written to a particular file.
 global pids, names
 
 
